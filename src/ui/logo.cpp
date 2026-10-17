@@ -1,4 +1,5 @@
 #include "logo.h"
+#include "logger.h"
 #include "resource.h"
 
 #include <d2d1_3.h>
@@ -60,12 +61,9 @@ bool load_png_resource(ID3D11Device* device, int identifier, ComPtr<ID3D11Shader
     return SUCCEEDED(device->CreateTexture2D(&description, &initial_data, &texture)) &&
         SUCCEEDED(device->CreateShaderResourceView(texture.Get(), nullptr, &output));
 }
-}
 
-bool init_logo(ID3D11Device* device)
+bool init_svg_logo_texture(ID3D11Device* device, ComPtr<ID3D11ShaderResourceView>& output)
 {
-    if ((logo_texture && avatar_texture) || !device) return logo_texture && avatar_texture;
-
     const HMODULE module = reinterpret_cast<HMODULE>(&__ImageBase);
     const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(IDR_LOGO_SVG), MAKEINTRESOURCEW(10));
     const HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
@@ -116,7 +114,9 @@ bool init_logo(ID3D11Device* device)
         FAILED(texture.As(&surface)) || FAILED(context->CreateBitmapFromDxgiSurface(surface.Get(), &properties, &target))) return false;
 
     ComPtr<ID2D1SvgDocument> document;
-    if (FAILED(context->CreateSvgDocument(stream.Get(), D2D1::SizeF(static_cast<float>(texture_size), static_cast<float>(texture_size)), &document))) return false;
+    if (FAILED(context->CreateSvgDocument(stream.Get(), D2D1::SizeF(static_cast<float>(texture_size), static_cast<float>(texture_size)), &document))) {
+        return false;
+    }
     context->SetTarget(target.Get());
     context->BeginDraw();
     context->Clear(D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 0.0f});
@@ -150,11 +150,34 @@ bool init_logo(ID3D11Device* device)
     texture_description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     D3D11_SUBRESOURCE_DATA initial_data{pixels.data(), row_size, 0};
     ComPtr<ID3D11Texture2D> uploaded;
-    const bool logo_ready = SUCCEEDED(device->CreateTexture2D(&texture_description, &initial_data, &uploaded)) &&
-        SUCCEEDED(device->CreateShaderResourceView(uploaded.Get(), nullptr, &logo_texture));
-    if (logo_ready && load_png_resource(device, IDR_AVATAR_PNG, avatar_texture)) return true;
-    shutdown_logo();
-    return false;
+    return SUCCEEDED(device->CreateTexture2D(&texture_description, &initial_data, &uploaded)) &&
+        SUCCEEDED(device->CreateShaderResourceView(uploaded.Get(), nullptr, &output));
+}
+}
+
+bool init_logo(ID3D11Device* device)
+{
+    if (!device) return false;
+
+    if (!logo_texture) {
+        ComPtr<ID3D11ShaderResourceView> svg_logo;
+        if (init_svg_logo_texture(device, svg_logo)) {
+            logo_texture = std::move(svg_logo);
+        } else {
+            logger::warning("Optional SVG logo unavailable; continuing without logo");
+        }
+    }
+
+    if (!avatar_texture) {
+        ComPtr<ID3D11ShaderResourceView> avatar;
+        if (load_png_resource(device, IDR_AVATAR_PNG, avatar)) {
+            avatar_texture = std::move(avatar);
+        } else {
+            logger::warning("Optional avatar unavailable; continuing without avatar");
+        }
+    }
+
+    return true;
 }
 
 void shutdown_logo()
